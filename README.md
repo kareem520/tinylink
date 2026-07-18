@@ -111,74 +111,38 @@ Five entities, four with an obvious job and one that stands apart:
 - **`ClickEvent`** — one row per visit to a link: who, when, where from.
 - **`RateLimitData`** — per-IP request counters. Deliberately *not* tied to a user — it's keyed by `clientIp`, so it can throttle anonymous callers too, not just logged-in ones.
 
-```mermaid
-erDiagram
-    USER ||--o{ URL_DATA : creates
-    USER }o--o{ ROLE : "has (via users_roles)"
-    URL_DATA ||--o{ CLICK_EVENT : records
-
-    USER {
-        long id PK
-        string username
-        string email UK
-        string name
-        string password
-        string phoneNumber
-        string profileUrl
-        string address
-        boolean isActive
-        datetime createdAt
-        datetime updatedAt
-    }
-
-    ROLE {
-        int id PK
-        string roleName
-    }
-
-    URL_DATA {
-        int id PK
-        string originalUrl
-        string shortCode
-        datetime createdAt
-        datetime expiresAt
-        int clickCount
-        string createdBy
-        boolean isActive
-        long user_id FK
-    }
-
-    CLICK_EVENT {
-        int id PK
-        datetime timestamp
-        string ipAddress
-        string userAgent
-        string referrer
-        string country
-        string city
-        int url_data_id FK
-    }
-
-    RATE_LIMIT_DATA {
-        long id PK
-        int minuteCount
-        int hourCount
-        string clientIp
-        datetime minuteWindowStart
-        datetime hourWindowStart
-    }
 ```
+┌────────────┐        ┌────────────┐        ┌─────────────┐
+│    User    │ 1    * │  UrlData   │ 1    * │ ClickEvent  │
+├────────────┤◄──────┤├────────────┤◄──────┤├─────────────┤
+│ id         │        │ id         │        │ id          │
+│ username   │        │ shortCode  │        │ ipAddress   │
+│ email      │        │ originalUrl│        │ userAgent   │
+│ roles[]    │        │ clickCount │        │ timestamp   │
+└─────┬──────┘        │ user_id ●──┘        │ url_data_id●┘
+      │ *                                          
+      │                                            
+      │ *              
+┌─────┴──────┐         
+│    Role    │          ┌────────────────┐
+├────────────┤          │  RateLimitData │  (standalone — keyed
+│ id         │          ├────────────────┤   by clientIp, no FK
+│ roleName   │          │ id             │   to User)
+└────────────┘          │ clientIp       │
+                         │ minuteCount    │
+                         │ hourCount      │
+                         └────────────────┘
+```
+
+`●` marks a foreign key. `User —< UrlData —< ClickEvent` is a straight one-to-many chain; `User >—< Role` is many-to-many through `users_roles`; `RateLimitData` sits off on its own since it has to work before the caller is even identified.
 
 **Why it's shaped this way:**
 
-- `User → UrlData` is one-to-many with `CascadeType.ALL` — deleting a user deletes their links. Deliberate, but worth knowing: there's no soft-delete cascade, so it's permanent.
-- `UrlData → ClickEvent` is the same pattern — one link, many recorded visits, cascaded on delete.
-- `User ↔ Role` is many-to-many, `EAGER`-fetched. Fine at small scale, but every time a `User` loads, its roles load with it — if the roles table grows or this entity gets queried a lot, that's a candidate to switch to `LAZY` later.
-- `RateLimitData` has **no foreign key to `User`** — and that's correct, not an oversight. Rate limiting has to work before you know who's calling (unauthenticated requests, registration spam, etc.), so it can only key off `clientIp`.
+- `User → UrlData` and `UrlData → ClickEvent` both cascade on delete — deleting a user or a link takes its children with it, permanently. No soft-delete safety net.
+- `User ↔ Role` is `EAGER`-fetched. Fine at small scale, but every `User` load pulls its roles too — a candidate for `LAZY` later if this entity gets queried often.
+- `RateLimitData` having no FK to `User` is deliberate, not an oversight — rate limiting has to work for anonymous callers too, so it can only key off `clientIp`.
 
-**Worth considering:**
-- `shortCode` and `clientIp` are both hot lookup columns but neither shows an explicit index/unique constraint here — both are good candidates for one, especially `shortCode` since every redirect depends on finding it fast.
-- `UrlData.createdBy` (String) duplicates information already available via `UrlData.user` — picking one as the source of truth would avoid the two silently drifting apart.
+**Worth considering:** `shortCode` and `clientIp` are hot lookup columns with no visible index/unique constraint — good candidates for one, especially `shortCode` since every redirect depends on finding it fast. Also, `UrlData.createdBy` (String) duplicates what's already reachable via `UrlData.user` — worth picking one as the source of truth.
 
 ---
 
@@ -198,18 +162,18 @@ Create a new short URL. Subject to rate limiting on the caller's IP.
 }
 ```
 
-**Response `200 OK`**
+**Response `201 Created`**
 ```json
 {
-  "statusCode": 200,
-  "message": "URL shortened successfully",
-  "data": {
-    "shortUrl": "http://localhost:8080/api/abc123",
-    "shortCode": "abc123",
-    "originalUrl": "https://example.com/some/very/long/path",
-    "createdAt": "2026-07-18T14:00:00.000Z",
-    "expiresAt": "2026-07-18T15:00:00.000Z"
-  }
+    "data": {
+        "shortUrl": "http://localhost:8080/api/safe/U10EcrW",
+        "shortCode": "U10EcrW",
+        "originalUrl": "https://spring.io/projects/spring-boot",
+        "createdAt": "2026-07-18T00:27:41.832522756",
+        "expiresAt": "2026-08-15T12:00:00"
+    },
+    "message": "short url created successfully",
+    "statusCode": 201
 }
 ```
 
@@ -221,16 +185,18 @@ Get stats for a single short link.
 **Response `200 OK`**
 ```json
 {
-  "statusCode": 200,
-  "message": "Stats fetched successfully",
-  "data": {
-    "shortCode": "abc123",
-    "originalUrl": "https://example.com/some/very/long/path",
-    "clickCount": 42,
-    "createdAt": "2026-07-18T14:00:00.000Z",
-    "expiresAt": "2026-07-18T15:00:00.000Z",
-    "active": true
-  }
+    "data": {
+        "shortCode": "U10EcrW",
+        "originalUrl": "https://spring.io/projects/spring-boot",
+        "clickCount": 5,
+        "createdAt": "2026-07-18T00:27:41.832523",
+        "expiresAt": "2026-08-15T12:00:00",
+        "createdByUser": "karim.fathi@example.com",
+        "createdBy": "172.19.0.1",
+        "active": true
+    },
+    "message": "URL stats retrieved successfully",
+    "statusCode": 200
 }
 ```
 
@@ -242,9 +208,53 @@ Deep analytics for a link — click history, geo data, request metadata.
 **Response `200 OK`**
 ```json
 {
-  "statusCode": 200,
-  "message": "Analytics fetched successfully",
-  "data": { }
+    "data": {
+        "shortCode": "U10EcrW",
+        "originalUrl": "https://spring.io/projects/spring-boot",
+        "totalClicks": 5,
+        "createdAt": "2026-07-18T00:27:41.832523",
+        "expiresAt": "2026-08-15T12:00:00",
+        "recentClicks": [
+            {
+                "id": 5,
+                "timestamp": "2026-07-18T01:15:48.181862",
+                "ipAddress": "172.19.0.1",
+                "userAgent": "PostmanRuntime/7.54.0"
+            },
+            {
+                "id": 4,
+                "timestamp": "2026-07-18T01:15:42.287844",
+                "ipAddress": "172.19.0.1",
+                "userAgent": "PostmanRuntime/7.54.0"
+            },
+            {
+                "id": 3,
+                "timestamp": "2026-07-18T01:15:35.960828",
+                "ipAddress": "172.19.0.1",
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+            },
+            {
+                "id": 2,
+                "timestamp": "2026-07-18T01:15:32.900097",
+                "ipAddress": "172.19.0.1",
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+            },
+            {
+                "id": 1,
+                "timestamp": "2026-07-18T01:15:30.502039",
+                "ipAddress": "172.19.0.1",
+                "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36 Edg/150.0.0.0"
+            }
+        ],
+        "clicksByHour": {
+            "1:00": 5
+        },
+        "clicksByDay": {
+            "2026-07-18": 5
+        }
+    },
+    "message": "URL Analytics retrieved successfully",
+    "statusCode": 200
 }
 ```
 
@@ -256,17 +266,38 @@ All short URLs created by the authenticated user.
 **Response `200 OK`**
 ```json
 {
-  "statusCode": 200,
-  "message": "URLs fetched successfully",
-  "data": [
-    {
-      "shortUrl": "http://localhost:8080/api/abc123",
-      "shortCode": "abc123",
-      "originalUrl": "https://example.com/some/very/long/path",
-      "createdAt": "2026-07-18T14:00:00.000Z",
-      "expiresAt": "2026-07-18T15:00:00.000Z"
-    }
-  ]
+    "data": [
+        {
+            "shortUrl": "http://localhost:8080/api/safe/spring-guide",
+            "shortCode": "spring-guide",
+            "originalUrl": "https://spring.io/projects/spring-boot",
+            "createdAt": "2026-07-18T00:09:51.792515",
+            "expiresAt": "2026-08-15T12:00:00"
+        },
+        {
+            "shortUrl": "http://localhost:8080/api/safe/spring-guide2",
+            "shortCode": "spring-guide2",
+            "originalUrl": "https://spring.io/projects/spring-boot",
+            "createdAt": "2026-07-18T00:10:12.607518",
+            "expiresAt": "2026-08-15T12:00:00"
+        },
+        {
+            "shortUrl": "http://localhost:8080/api/safe/spring-guide3",
+            "shortCode": "spring-guide3",
+            "originalUrl": "https://spring.io/projects/spring-boot",
+            "createdAt": "2026-07-18T00:11:07.787939",
+            "expiresAt": "2026-08-15T12:00:00"
+        },
+        {
+            "shortUrl": "http://localhost:8080/api/safe/U10EcrW",
+            "shortCode": "U10EcrW",
+            "originalUrl": "https://spring.io/projects/spring-boot",
+            "createdAt": "2026-07-18T00:27:41.832523",
+            "expiresAt": "2026-08-15T12:00:00"
+        }
+    ],
+    "message": "retrieved successfully",
+    "statusCode": 200
 }
 ```
 
