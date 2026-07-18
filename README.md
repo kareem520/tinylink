@@ -1,441 +1,195 @@
-# 🔗 TinyLink - URL Shortener 🚀
+# 🔗 TinyLink — URL Shortener
 
-A highly scalable URL Shortener backend built with Spring Boot. The application allows users to create short URLs, redirect visitors, track analytics, apply rate limiting, and cache frequently accessed URLs using Redis.
+A scalable URL shortener backend built with **Spring Boot**. It generates short links, redirects visitors, tracks click analytics, rate-limits abusive clients, and leans on Redis to keep the hot path fast.
 
----
-
-## 📝 Description
-
-TinyLink is a scalable URL shortening backend that enables users to generate, manage, and analyze shortened links.
-
-### Key Capabilities
-
-* **Short-Code Strategy:** Generate unique short URLs from long URLs using an efficient short-code generation strategy.
-* **Customization:** Support custom aliases and configurable URL expiration.
-* **High Performance:** Handle high-speed URL redirection with Redis-based caching.
-* **Deep Analytics:** Collect click analytics such as click count, user agent, IP address, and request metadata.
-* **Distributed Rate Limiting:** Apply distributed-friendly, IP-based rate limiting on URL creation:
-  * ⏳ `2 requests per minute` per client
-  * ⏳ `10 requests per hour` per client
-* **Automated Housekeeping:** Automatically invalidate expired links through scheduled background cleanup tasks.
-* **Open API:** Provide REST APIs documented with Swagger/OpenAPI.
+No frontend here — this is a pure REST API, meant to be driven through Swagger, Postman, or your own client.
 
 ---
 
-## 📌 Features
+## ✨ What it does
 
-### 🔐 Authentication & Authorization
-* JWT-based authentication
-* Secure user registration and login
-* Role-based authorization
+Give it a long URL, get back something short. Under the hood, three things make it more than a toy project:
 
-### 🔗 URL Management
-* Create custom short URLs
-* Blazing-fast redirection from short URLs to original URLs
-* Expiration support with automatic background cleanup of expired URLs
+- **Speed** — redirects are served from a Redis cache, not the database, so the hot path stays fast even under load.
+- **Self-defense** — IP-based rate limiting sits in front of URL creation, backed by Redis so it works correctly across multiple app instances, not just in one JVM's memory.
+- **Self-cleaning** — a scheduled job quietly retires expired links and their cache entries in the background, so nothing has to be cleaned up by hand.
 
-### 📊 Analytics Tracking
-* Total click count
-* Geographic location (country & city tracking)
-* Request metadata (IP address, user agent, referrer)
-* Recent clicks history timeline
+### Highlights
 
-### ⚡ Performance & Storage
-* **Redis Caching:** Drastically reduces database load for URL redirections.
-* **Redis Rate Limiting:** Prevents API abuse at the network edge.
-* **AWS S3 Integration:** Used for robust cloud storage of user assets (e.g. profile pictures).
+| | |
+|---|---|
+| 🔤 **Short codes** | Base62-generated, or bring your own custom alias |
+| ⏰ **Expiration** | Set an expiry date; cleanup handles the rest automatically |
+| ⚡ **Caching** | Redis-backed `shortCode → originalUrl` lookups for fast redirects |
+| 🛡️ **Rate limiting** | Per-IP limits on link creation, distributed via Redis |
+| 📊 **Analytics** | Click counts, IP/user-agent metadata, geo tracking, recent-click history |
+| 🔐 **Auth** | JWT-based authentication with role-based access control |
+| 📘 **Docs** | Full OpenAPI/Swagger spec, browsable and testable in-browser |
 
 ---
 
-## 🛠️ Tech Stack & Architecture
+## 🛠️ Tech Stack
 
-| Layer | Technologies Used |
-| :--- | :--- |
-| **Backend Framework** | Java 21, Spring Boot, Spring Security, Spring Data JPA, Hibernate, Lombok |
+| Layer | Technology |
+|---|---|
+| **Language / Framework** | Java 21, Spring Boot, Spring Security, Spring Data JPA, Hibernate, Lombok |
 | **Database** | MySQL |
-| **Caching & Security** | Redis (Caching & Rate Limiting), JWT (Auth tokens) |
-| **Cloud Infrastructure** | AWS S3 |
-| **Documentation** | Swagger / OpenAPI |
+| **Caching & Rate Limiting** | Redis |
+| **Auth** | JWT |
+| **File Storage** | AWS S3 |
+| **Docs** | Swagger / OpenAPI |
 | **Deployment** | Docker, Docker Compose |
 
-> This is a backend-only project — no frontend is included. All endpoints can be explored and tested directly through the Swagger UI.
-
 ---
 
-## 🚀 Getting Started
-
-### Requirements
-
-Ensure you have the following installed locally:
-
-* Java 21
-* Maven
-* Docker & Docker Compose
-* MySQL
-
-### Running the Project
+## 🚀 Running It
 
 ```bash
-# Clone the repository
 git clone https://github.com/<your-username>/tinylink.git
 cd tinylink
 
-# Start dependencies (MySQL, Redis) with Docker Compose
+# spin up MySQL + Redis
 docker-compose up -d
 
-# Run the application
+# run the app
 mvn spring-boot:run
 ```
 
-Once running, the API is available at:
+| | |
+|---|---|
+| API | `http://localhost:8080` |
+| Swagger UI | `http://localhost:8080/swagger-ui/index.html` |
 
-```
-http://localhost:8080
-```
-
-Swagger UI:
-
-```
-http://localhost:8080/swagger-ui/index.html
-```
+**Requirements:** Java 21 · Maven · Docker & Docker Compose · MySQL
 
 ---
 
-## ⚙️ Configuration
+## 🔄 How a Link's Life Looks
 
-The application is configured via `application.properties`. **Never commit real secrets** (DB password, AWS keys, JWT secret) — use environment variables or a local, git-ignored properties file instead.
+**Creating one**
+1. Client sends `POST /api/shorten`
+2. The rate limiter checks the caller's IP before anything else happens
+3. A custom alias is used if provided, otherwise a random Base62 code is generated
+4. The link is persisted, then cached in Redis (`shortCode → originalUrl`)
+5. The response comes back with the short URL, code, original URL, and timestamps
 
-```properties
-spring.application.name=tinylink
+**Visiting one**
+1. A client hits `GET /api/{shortCode}`
+2. Redis is checked first — cache hit means an instant `302` redirect
+3. On a cache miss, the database is checked instead
+4. An expired link is marked inactive and returns `404`
+5. Otherwise, the click is recorded and the visitor is redirected
 
-## MySQL
-spring.datasource.url=jdbc:mysql://host.docker.internal:3307/urlshortener
-spring.datasource.username=root
-spring.datasource.password=${DB_PASSWORD}
-spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
-spring.jpa.hibernate.ddl-auto=update
+**Checking on one**
+- `GET /api/stats/{shortCode}` returns click count, status, and timestamps
+- `GET /api/analytics/{shortCode}` goes deeper — geo data, request metadata, click history
 
-## JWT
-spring.app.jwtSecret=${JWT_SECRET}
-spring.app.jwtExpirationInSeconds=172800000
-
-## Default role assigned on registration
-user.default.role=USER
-
-## AWS S3
-aws.s3.region=eu-north-1
-aws.s3.bucket=url-shortener-backend
-aws.accessKeyId=${AWS_ACCESS_KEY_ID}
-aws.secretKey=${AWS_SECRET_ACCESS_KEY}
-
-## Redis
-spring.data.redis.host=redis
-spring.data.redis.port=6379
-spring.data.redis.timeout=2000ms
-spring.data.redis.lettuce.pool.max-active=8
-spring.data.redis.lettuce.pool.max-idle=8
-spring.data.redis.lettuce.pool-min-idle=0
-
-## TinyLink
-tinylink.base-url=http://localhost:8080
-
-# Short code
-tinylink.short-code.length=7
-tinylink.short-code.max-attempts=10
-
-# Rate limit
-tinylink.rate-limit.requests-per-minute=2
-tinylink.rate-limit.requests-per-hour=10
-
-# Cache
-tinylink.cache.ttl-minutes=30
-
-# Cleanup
-tinylink.cleanup.interval=5m
-tinylink.cleanup.expired-urls-batch-size=100
-```
-
-> ⚠️ `spring.app.jwtExpirationInSeconds` is named as seconds, but the current value (`172800000`) only makes sense as **milliseconds** (48 hours / 2 days). If parsed literally as seconds, tokens would stay valid for years. Worth confirming how this value is consumed in `JwtUtils` and renaming the property if needed.
-
-| Property | Default | Meaning |
-| :--- | :--- | :--- |
-| `tinylink.short-code.length` | `7` | Length of generated Base62 short codes |
-| `tinylink.short-code.max-attempts` | `10` | Retry attempts on short-code collision |
-| `tinylink.rate-limit.requests-per-minute` | `2` | Max URL-creation requests per client per minute |
-| `tinylink.rate-limit.requests-per-hour` | `10` | Max URL-creation requests per client per hour |
-| `tinylink.cache.ttl-minutes` | `30` | TTL for cached `shortCode → originalUrl` entries in Redis |
-| `tinylink.cleanup.interval` | `5m` | How often the expired-URL cleanup job runs |
-| `tinylink.cleanup.expired-urls-batch-size` | `100` | Max number of expired URLs processed per cleanup run |
-| `spring.app.jwtExpirationInSeconds` | `172800000` | JWT validity — effectively ~48 hours if treated as milliseconds |
+**In the background**
+- A scheduled cleanup job periodically sweeps expired links, marks them inactive, and evicts their Redis cache entries — no manual housekeeping required.
 
 ---
 
-## 🔄 End-to-End Flow
+## ⚡ Why Redis, twice
 
-### 1. Create Short URL
+Redis pulls double duty here, and it's worth knowing the two roles aren't related:
 
-1. A client sends `POST /api/shorten`
-2. The backend controller extracts the client IP
-3. The rate limiter checks whether that client is allowed to make the request
-4. The service either uses the provided custom alias or generates a random Base62 code
-5. The backend persists the `UrlData`
-6. The backend caches `shortCode -> originalUrl` in Redis
-7. The backend returns a response containing:
-   * `shortUrl`
-   * `shortCode`
-   * `originalUrl`
-   * timestamps (`createdAt`, `expiresAt`)
+**1. As a cache** — `url:{shortCode} → originalUrl`, with a TTL. This is the classic cache-aside pattern: check Redis first, fall back to the database, then repopulate the cache. It exists purely for speed.
 
-### 2. Open Short URL (Redirect)
+**2. As shared rate-limit state** — `rate-limiter:{clientIp} → RateLimitData`, expiring after an hour. Since the app can run as multiple instances, rate-limit counters can't just live in local JVM memory — that would let each instance grant its own separate quota. Redis gives every instance the same view of who's over their limit.
 
-1. A client requests `GET /api/{shortCode}`
-2. The backend first checks the Redis cache for the original URL
-3. If not found in Redis, it falls back to the database lookup
-4. If the URL is expired, it is marked inactive and the request returns `404`
-5. If found, the backend records the click and responds with HTTP `302 Found`
-6. The client is redirected to the original URL
-
-### 3. Load Stats
-
-1. A client sends `GET /api/stats/{shortCode}`
-2. The backend reads the corresponding `UrlData`
-3. The backend returns click count, creator info, active status, and timestamps
-
-### 4. Scheduled Cleanup
-
-1. Spring scheduling is enabled in the application
-2. `CleanupScheduler` runs every `tinylink.cleanup.interval` (default `5m`)
-3. Expired URLs are marked inactive, processed in batches of `tinylink.cleanup.expired-urls-batch-size` (default `100`)
-4. Related Redis cache entries are deleted
+> 💡 Don't confuse `requestCount` (rate-limit counter) with `clickCount` (analytics counter) — they live in different systems and track completely different things.
 
 ---
 
-## ⚡ Redis Usage
+## 🗄️ Data Model
 
-Redis is used in two places:
+Five entities, four with an obvious job and one that stands apart:
 
-### 1. URL Cache
+- **`User`** — account holder. Owns links, holds roles.
+- **`Role`** — a name (`USER`, `ADMIN`, ...), joined to users through `users_roles`.
+- **`UrlData`** — the short link itself: code, target, expiry, click count.
+- **`ClickEvent`** — one row per visit to a link: who, when, where from.
+- **`RateLimitData`** — per-IP request counters. Deliberately *not* tied to a user — it's keyed by `clientIp`, so it can throttle anonymous callers too, not just logged-in ones.
 
-**Key shape:**
+```mermaid
+erDiagram
+    USER ||--o{ URL_DATA : creates
+    USER }o--o{ ROLE : "has (via users_roles)"
+    URL_DATA ||--o{ CLICK_EVENT : records
+
+    USER {
+        long id PK
+        string username
+        string email UK
+        string name
+        string password
+        string phoneNumber
+        string profileUrl
+        string address
+        boolean isActive
+        datetime createdAt
+        datetime updatedAt
+    }
+
+    ROLE {
+        int id PK
+        string roleName
+    }
+
+    URL_DATA {
+        int id PK
+        string originalUrl
+        string shortCode
+        datetime createdAt
+        datetime expiresAt
+        int clickCount
+        string createdBy
+        boolean isActive
+        long user_id FK
+    }
+
+    CLICK_EVENT {
+        int id PK
+        datetime timestamp
+        string ipAddress
+        string userAgent
+        string referrer
+        string country
+        string city
+        int url_data_id FK
+    }
+
+    RATE_LIMIT_DATA {
+        long id PK
+        int minuteCount
+        int hourCount
+        string clientIp
+        datetime minuteWindowStart
+        datetime hourWindowStart
+    }
 ```
-url:{shortCode}
-```
 
-**Value:** original URL string
+**Why it's shaped this way:**
 
-**Purpose:**
-* Fast redirect lookup
-* Demonstrates the cache-aside pattern
-* Reduces repeated reads from the main data store
+- `User → UrlData` is one-to-many with `CascadeType.ALL` — deleting a user deletes their links. Deliberate, but worth knowing: there's no soft-delete cascade, so it's permanent.
+- `UrlData → ClickEvent` is the same pattern — one link, many recorded visits, cascaded on delete.
+- `User ↔ Role` is many-to-many, `EAGER`-fetched. Fine at small scale, but every time a `User` loads, its roles load with it — if the roles table grows or this entity gets queried a lot, that's a candidate to switch to `LAZY` later.
+- `RateLimitData` has **no foreign key to `User`** — and that's correct, not an oversight. Rate limiting has to work before you know who's calling (unauthenticated requests, registration spam, etc.), so it can only key off `clientIp`.
 
-**TTL:** configured through `tinylink.cache.ttl-minutes` (default `30` minutes)
-
-> Even though URLs are not editable today, TTL is still useful for automatic cleanup of cold cache entries, reducing memory growth, and avoiding stale values after delete/expiry.
-
-### 2. Rate-Limit State
-
-**Key shape:**
-```
-rate-limiter:{clientIp}
-```
-
-**Value:** serialized `RateLimitData`
-
-**Purpose:**
-* Shares rate-limit state across multiple app instances
-* Avoids relying only on local in-memory (JVM) state
-
-**TTL:** one hour on save — prevents unused rate-limit keys from living forever.
+**Worth considering:**
+- `shortCode` and `clientIp` are both hot lookup columns but neither shows an explicit index/unique constraint here — both are good candidates for one, especially `shortCode` since every redirect depends on finding it fast.
+- `UrlData.createdBy` (String) duplicates information already available via `UrlData.user` — picking one as the source of truth would avoid the two silently drifting apart.
 
 ---
 
-## 🚦 Rate Limiting
+## 📡 API Reference — URL Shortener
 
-Rate limiting is checked before shortening a URL.
+All endpoints are prefixed with `/api`. Interactive docs live at `/swagger-ui/index.html`.
 
-**Current behavior:**
-* Per client / IP
-* Minute threshold — configurable
-* Hour threshold — configurable
-* Redis-backed when available
-* Falls back to in-memory storage if Redis is unavailable
+### `POST /api/shorten`
+Create a new short URL. Subject to rate limiting on the caller's IP.
 
-**High-level flow:**
-1. Build the Redis key from the client IP
-2. Read `RateLimitData` from Redis
-3. If missing, create local in-memory state
-4. Check whether the current request is still within the same minute window
-5. Reset the minute counter if the window has expired
-6. Increment the request count if the request is allowed
-7. Save the updated state back to Redis
-
-> **Note:** `requestCount` is a rate-limit counter, while `clickCount` is a URL-analytics counter. These are different values and should not be confused.
-
----
-
-## 📡 API Reference
-
-Base URL: `http://localhost:8080`
-
-Interactive Swagger UI: `http://localhost:8080/swagger-ui/index.html`
-
-Most endpoints below (except `register`, `login`, and the redirect/safe-check endpoints) require a JWT sent in the `Authorization: Bearer <token>` header.
-
-### 🔐 Auth Controller — `/api/auth`
-
-#### `POST /api/auth/register`
-Registers a new user.
-
-**Request body** (`application/json`)
-```json
-{
-  "name": "John Doe",
-  "email": "user@example.com",
-  "phoneNumber": "+201234567890",
-  "address": "Cairo, Egypt",
-  "password": "strongPassword123",
-  "roles": ["USER"]
-}
-```
-
-**Response `200 OK`**
-```json
-{
-  "statusCode": 200,
-  "message": "User registered successfully",
-  "data": {},
-  "metadata": {}
-}
-```
-
----
-
-#### `POST /api/auth/login`
-Authenticates a user and returns a JWT.
-
-**Request body** (`application/json`)
-```json
-{
-  "email": "user@example.com",
-  "password": "strongPassword123"
-}
-```
-
-**Response `200 OK`**
-```json
-{
-  "statusCode": 200,
-  "message": "Login successful",
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-    "roles": ["USER"]
-  },
-  "metadata": {}
-}
-```
-
----
-
-### 👤 User Controller — `/api/users`
-
-#### `PUT /api/users/update`
-Updates the authenticated user's profile. Accepts partial updates.
-
-**Request body** (`multipart/form-data`)
-
-| Field | Type | Description |
-| :--- | :--- | :--- |
-| `name` | string | Updated full name |
-| `email` | string | Updated email |
-| `phoneNumber` | string | Updated phone number |
-| `password` | string | New password (write-only) |
-| `address` | string | Updated address |
-| `profilePicture` | binary (file) | New profile picture, uploaded to AWS S3 |
-
-**Response `200 OK`**
-```json
-{
-  "statusCode": 200,
-  "message": "Account updated successfully",
-  "data": {},
-  "metadata": {}
-}
-```
-
----
-
-#### `GET /api/users`
-Returns the authenticated user's profile.
-
-**Response `200 OK`**
-```json
-{
-  "statusCode": 200,
-  "message": "User fetched successfully",
-  "data": {
-    "id": 1,
-    "name": "John Doe",
-    "email": "user@example.com",
-    "profileUrl": "string",
-    "address": "Cairo, Egypt",
-    "roles": [
-      { "id": 1, "roleName": "USER" }
-    ],
-    "profilePicture": "string",
-    "active": true
-  },
-  "metadata": {}
-}
-```
-
----
-
-#### `DELETE /api/users/deactive`
-Deactivates (soft-deletes) the authenticated user's account.
-
-**Response `200 OK`**
-```json
-{
-  "statusCode": 200,
-  "message": "Account deactivated successfully",
-  "data": {},
-  "metadata": {}
-}
-```
-
----
-
-### ☁️ AWS Test Upload — `/api/upload`
-
-#### `POST /api/upload`
-Uploads a file directly to AWS S3 (used for testing the S3 integration).
-
-**Query parameters**
-
-| Name | Type | Required |
-| :--- | :--- | :--- |
-| `keyName` | string | ✅ |
-
-**Request body** (`application/json`)
-```json
-{
-  "file": "string"
-}
-```
-
-**Response `200 OK`**
-```json
-"https://your-bucket.s3.amazonaws.com/keyName"
-```
-
----
-
-### 🔗 URL Shortener Controller — `/api`
-
-#### `POST /api/shorten`
-Creates a new shortened URL. Rate-limited per client IP (`2 req/min`, `10 req/hour`).
-
-**Request body** (`application/json`)
+**Body**
 ```json
 {
   "originalUrl": "https://example.com/some/very/long/path",
@@ -455,21 +209,14 @@ Creates a new shortened URL. Rate-limited per client IP (`2 req/min`, `10 req/ho
     "originalUrl": "https://example.com/some/very/long/path",
     "createdAt": "2026-07-18T14:00:00.000Z",
     "expiresAt": "2026-07-18T15:00:00.000Z"
-  },
-  "metadata": {}
+  }
 }
 ```
 
 ---
 
-#### `GET /api/stats/{shortCode}`
-Returns statistics for a specific short URL.
-
-**Path parameters**
-
-| Name | Type | Required |
-| :--- | :--- | :--- |
-| `shortCode` | string | ✅ |
+### `GET /api/stats/{shortCode}`
+Get stats for a single short link.
 
 **Response `200 OK`**
 ```json
@@ -482,31 +229,29 @@ Returns statistics for a specific short URL.
     "clickCount": 42,
     "createdAt": "2026-07-18T14:00:00.000Z",
     "expiresAt": "2026-07-18T15:00:00.000Z",
-    "createdByUser": "string",
-    "createdBy": "string",
     "active": true
-  },
-  "metadata": {}
+  }
 }
 ```
 
 ---
 
-#### `GET /api/safe/{shortCode}`
-Checks whether a short URL is still valid/active before redirecting (e.g. a safe-preview / phishing-guard step).
+### `GET /api/analytics/{shortCode}`
+Deep analytics for a link — click history, geo data, request metadata.
 
-**Path parameters**
-
-| Name | Type | Required |
-| :--- | :--- | :--- |
-| `shortCode` | string | ✅ |
-
-**Response:** `200 OK`
+**Response `200 OK`**
+```json
+{
+  "statusCode": 200,
+  "message": "Analytics fetched successfully",
+  "data": { }
+}
+```
 
 ---
 
-#### `GET /api/my-all`
-Returns all short URLs created by the authenticated user.
+### `GET /api/my-all`
+All short URLs created by the authenticated user.
 
 **Response `200 OK`**
 ```json
@@ -521,44 +266,35 @@ Returns all short URLs created by the authenticated user.
       "createdAt": "2026-07-18T14:00:00.000Z",
       "expiresAt": "2026-07-18T15:00:00.000Z"
     }
-  ],
-  "metadata": {}
+  ]
 }
 ```
 
 ---
 
-#### `GET /api/analytics/{shortCode}`
-Returns deep analytics for a short URL (click history, geo data, request metadata).
+### `GET /api/safe/{shortCode}`
+Checks whether a short link is still valid/active — a lightweight guard before redirecting.
 
-**Path parameters**
-
-| Name | Type | Required |
-| :--- | :--- | :--- |
-| `shortCode` | string | ✅ |
-
-**Response `200 OK`**
-```json
-{
-  "statusCode": 200,
-  "message": "Analytics fetched successfully",
-  "data": "string",
-  "metadata": {}
-}
-```
+**Response:** `200 OK`
 
 ---
 
-### 📦 Response Envelope
+### `GET /api/{shortCode}`
+The actual redirect. Resolves the short code and sends the visitor on to the original URL.
 
-All endpoints (except `POST /api/upload` and the redirect/safe-check endpoints) return a consistent envelope:
+**Response:** `302 Found` → `Location: <originalUrl>`, or `404` if expired/unknown.
+
+---
+
+## 📦 Response Shape
+
+Most JSON responses share the same envelope:
 
 ```json
 {
   "statusCode": 200,
   "message": "Human-readable message",
-  "data": { },
-  "metadata": { }
+  "data": { }
 }
 ```
 
@@ -566,4 +302,4 @@ All endpoints (except `POST /api/upload` and the redirect/safe-check endpoints) 
 
 ## 📄 License
 
-Feel free to add your license of choice here (e.g. MIT).
+MIT — or swap in whatever you're actually using.
