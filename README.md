@@ -5,6 +5,22 @@ The application allows users to create short URLs, redirect visitors, track anal
 
 ---
 
+## What It Does
+
+TinyLink is a scalable URL shortening backend that enables users to generate, manage, and analyze shortened links.
+
+Key capabilities:
+
+- Generate unique short URLs from long URLs using an efficient short-code generation strategy.
+- Support custom aliases and configurable URL expiration.
+- Handle high-speed URL redirection with Redis-based caching.
+- Collect click analytics such as click count, user agent, IP address, and request metadata.
+- Apply distributed-friendly IP-based rate limiting on URL creation:
+  - 2 requests per minute per client
+  - 10 requests per hour per client
+- Automatically invalidate expired links through scheduled background cleanup tasks.
+- Provide REST APIs documented with Swagger/OpenAPI.
+- 
 ## 📌 Features
 
 ### Authentication & Authorization
@@ -45,3 +61,44 @@ Track:
 - External MySQL database
 
 ---
+# 🛠 Technologies
+
+## Backend
+- Java 21
+- Spring Boot
+- Spring Security
+- JWT
+- Spring Data JPA
+- Hibernate
+- Lombok
+
+## Database
+- MySQL
+
+## Cache
+- Redis
+
+## Cloud
+- AWS S3
+
+## Documentation
+- Swagger / OpenAPI
+
+## Deployment
+- Docker
+
+---
+
+# 🚀 Running The Project
+
+## Requirements
+
+Install:
+
+- Java 21
+- Maven
+- Docker
+- MySQL
+
+---
+
