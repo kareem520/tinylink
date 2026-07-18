@@ -101,6 +101,75 @@ http://localhost:8080/swagger-ui/index.html
 
 ---
 
+## ⚙️ Configuration
+
+The application is configured via `application.properties`. **Never commit real secrets** (DB password, AWS keys, JWT secret) — use environment variables or a local, git-ignored properties file instead.
+
+```properties
+spring.application.name=tinylink
+
+## MySQL
+spring.datasource.url=jdbc:mysql://host.docker.internal:3307/urlshortener
+spring.datasource.username=root
+spring.datasource.password=${DB_PASSWORD}
+spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.MySQLDialect
+spring.jpa.hibernate.ddl-auto=update
+
+## JWT
+spring.app.jwtSecret=${JWT_SECRET}
+spring.app.jwtExpirationInSeconds=172800000
+
+## Default role assigned on registration
+user.default.role=USER
+
+## AWS S3
+aws.s3.region=eu-north-1
+aws.s3.bucket=url-shortener-backend
+aws.accessKeyId=${AWS_ACCESS_KEY_ID}
+aws.secretKey=${AWS_SECRET_ACCESS_KEY}
+
+## Redis
+spring.data.redis.host=redis
+spring.data.redis.port=6379
+spring.data.redis.timeout=2000ms
+spring.data.redis.lettuce.pool.max-active=8
+spring.data.redis.lettuce.pool.max-idle=8
+spring.data.redis.lettuce.pool-min-idle=0
+
+## TinyLink
+tinylink.base-url=http://localhost:8080
+
+# Short code
+tinylink.short-code.length=7
+tinylink.short-code.max-attempts=10
+
+# Rate limit
+tinylink.rate-limit.requests-per-minute=2
+tinylink.rate-limit.requests-per-hour=10
+
+# Cache
+tinylink.cache.ttl-minutes=30
+
+# Cleanup
+tinylink.cleanup.interval=5m
+tinylink.cleanup.expired-urls-batch-size=100
+```
+
+> ⚠️ `spring.app.jwtExpirationInSeconds` is named as seconds, but the current value (`172800000`) only makes sense as **milliseconds** (48 hours / 2 days). If parsed literally as seconds, tokens would stay valid for years. Worth confirming how this value is consumed in `JwtUtils` and renaming the property if needed.
+
+| Property | Default | Meaning |
+| :--- | :--- | :--- |
+| `tinylink.short-code.length` | `7` | Length of generated Base62 short codes |
+| `tinylink.short-code.max-attempts` | `10` | Retry attempts on short-code collision |
+| `tinylink.rate-limit.requests-per-minute` | `2` | Max URL-creation requests per client per minute |
+| `tinylink.rate-limit.requests-per-hour` | `10` | Max URL-creation requests per client per hour |
+| `tinylink.cache.ttl-minutes` | `30` | TTL for cached `shortCode → originalUrl` entries in Redis |
+| `tinylink.cleanup.interval` | `5m` | How often the expired-URL cleanup job runs |
+| `tinylink.cleanup.expired-urls-batch-size` | `100` | Max number of expired URLs processed per cleanup run |
+| `spring.app.jwtExpirationInSeconds` | `172800000` | JWT validity — effectively ~48 hours if treated as milliseconds |
+
+---
+
 ## 🔄 End-to-End Flow
 
 ### 1. Create Short URL
@@ -135,8 +204,8 @@ http://localhost:8080/swagger-ui/index.html
 ### 4. Scheduled Cleanup
 
 1. Spring scheduling is enabled in the application
-2. `CleanupScheduler` runs on a configured interval
-3. Expired URLs are marked inactive
+2. `CleanupScheduler` runs every `tinylink.cleanup.interval` (default `5m`)
+3. Expired URLs are marked inactive, processed in batches of `tinylink.cleanup.expired-urls-batch-size` (default `100`)
 4. Related Redis cache entries are deleted
 
 ---
@@ -159,7 +228,7 @@ url:{shortCode}
 * Demonstrates the cache-aside pattern
 * Reduces repeated reads from the main data store
 
-**TTL:** configured through `tinylink.cache.ttl-minutes`
+**TTL:** configured through `tinylink.cache.ttl-minutes` (default `30` minutes)
 
 > Even though URLs are not editable today, TTL is still useful for automatic cleanup of cold cache entries, reducing memory growth, and avoiding stale values after delete/expiry.
 
