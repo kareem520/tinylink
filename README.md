@@ -1,6 +1,6 @@
 # 🔗 TinyLink — URL Shortener
 
-A scalable URL shortener backend built with **Spring Boot**. It generates short links, redirects visitors, tracks click analytics, rate-limits abusive clients, and leans on Redis to keep the hot path fast.
+A URL shortener backend built with **Spring Boot**. It generates short links, redirects visitors, tracks click analytics, rate-limits abusive clients, and leans on Redis to keep the hot path fast.
 
 No frontend here — this is a pure REST API, meant to be driven through Swagger, Postman, or your own client.
 
